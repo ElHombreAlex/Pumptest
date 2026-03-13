@@ -14,6 +14,7 @@ import anthropic
 
 from config import cfg
 from models import AnalysisResult, TokenEvent, TradeEvent
+from bonding_curve import BondingCurveCalculator, BondingCurveState
 
 log = logging.getLogger(__name__)
 
@@ -66,8 +67,10 @@ New Pump.fun token launched. Analyse it:
 - Created:     {created_timestamp}
 
 ## Launch Metrics
-- Initial dev buy (SOL):  {initial_buy_sol:.4f}
-- Initial market cap (SOL): {initial_market_cap:.2f}
+- Initial dev buy est. (SOL):  {initial_buy_sol:.4f}
+- Initial market cap (SOL):    {initial_market_cap:.2f}
+- Graduation progress:         {graduation_pct:.1f}%  (100% = migrates to PumpSwap at ~85 SOL)
+- Price impact if I buy {max_buy_sol} SOL: {price_impact:.2f}%
 
 ## First {trade_count} Trade(s)
 {trade_summary}
@@ -99,6 +102,16 @@ class TokenAnalyzer:
 
         trade_summary = _format_trades(recent_trades)
 
+        # Compute bonding curve metrics if we have reserve data
+        bc_state = BondingCurveState(
+            virtual_token_reserves=1_073_000_000_000_000,  # approximation if no live data
+            virtual_sol_reserves=max(token.v_sol_reserves, 30.0),
+            real_token_reserves=793_100_000_000_000,
+            real_sol_reserves=0.0,
+        )
+        graduation_pct = bc_state.graduation_progress_pct
+        price_impact = BondingCurveCalculator.price_impact_pct(bc_state, cfg.MAX_BUY_SOL)
+
         user_msg = _USER_TEMPLATE.format(
             name=token.name or "Unknown",
             symbol=token.symbol or "???",
@@ -110,6 +123,8 @@ class TokenAnalyzer:
             created_timestamp=token.created_timestamp,
             initial_buy_sol=token.initial_buy_sol,
             initial_market_cap=token.initial_market_cap,
+            graduation_pct=graduation_pct,
+            price_impact=price_impact,
             trade_count=len(recent_trades),
             trade_summary=trade_summary or "No trades yet.",
             max_buy_sol=cfg.MAX_BUY_SOL,

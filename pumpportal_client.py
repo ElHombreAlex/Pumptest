@@ -152,6 +152,8 @@ class PumpPortalClient:
 
 def _parse_token_event(data: dict) -> TokenEvent | None:
     try:
+        # PumpPortal returns camelCase; initialBuy is token amount (not SOL)
+        # marketCapSol is already in SOL units
         return TokenEvent(
             mint=data.get("mint", ""),
             name=data.get("name", ""),
@@ -164,8 +166,11 @@ def _parse_token_event(data: dict) -> TokenEvent | None:
             website=data.get("website", ""),
             creator=data.get("traderPublicKey", ""),
             created_timestamp=data.get("timestamp", time.time()),
-            initial_buy_sol=_lamports_to_sol(data.get("initialBuy", 0)),
+            # initialBuy = token amount; estimate SOL via market cap ratio
+            initial_buy_sol=_estimate_initial_buy_sol(data),
             initial_market_cap=data.get("marketCapSol", 0.0),
+            # Store virtual reserves for bonding curve math
+            v_sol_reserves=data.get("vSolInBondingCurve", 0.0),
         )
     except Exception as exc:
         log.debug("Could not parse token event: %s | %s", exc, data)
@@ -174,13 +179,26 @@ def _parse_token_event(data: dict) -> TokenEvent | None:
 
 def _parse_trade_event(data: dict) -> TradeEvent | None:
     try:
+        # sol_amount / solAmount — PumpPortal sends camelCase
+        sol_amt = (
+            data.get("solAmount")
+            or data.get("sol_amount")
+            or 0
+        )
+        token_amt = (
+            data.get("tokenAmount")
+            or data.get("token_amount")
+            or 0
+        )
         return TradeEvent(
             mint=data.get("mint", ""),
             trader=data.get("traderPublicKey", ""),
             action=TradeAction.BUY if data.get("txType") == "buy" else TradeAction.SELL,
-            sol_amount=_lamports_to_sol(data.get("solAmount", 0)),
-            token_amount=data.get("tokenAmount", 0),
+            # PumpPortal returns SOL amounts already divided (not raw lamports)
+            sol_amount=float(sol_amt),
+            token_amount=float(token_amt),
             new_market_cap=data.get("marketCapSol", 0.0),
+            v_sol_reserves=data.get("vSolInBondingCurve", 0.0),
             timestamp=data.get("timestamp", time.time()),
         )
     except Exception as exc:
@@ -188,5 +206,14 @@ def _parse_trade_event(data: dict) -> TradeEvent | None:
         return None
 
 
-def _lamports_to_sol(lamports: int | float) -> float:
-    return lamports / 1_000_000_000 if lamports else 0.0
+def _estimate_initial_buy_sol(data: dict) -> float:
+    """
+    PumpPortal 'initialBuy' is a token amount, not SOL.
+    Estimate SOL spent using the market cap and total supply ratio.
+    """
+    mcap = data.get("marketCapSol", 0.0)
+    initial_buy_tokens = data.get("initialBuy", 0)
+    total_supply = 1_000_000_000  # Pump.fun always mints 1B tokens (6 decimals → 1e9 base units)
+    if mcap and initial_buy_tokens and total_supply:
+        return mcap * (initial_buy_tokens / total_supply)
+    return 0.0

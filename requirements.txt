@@ -1,9 +1,17 @@
+# Core AI
 anthropic>=0.40.0
-websockets>=12.0
-aiohttp>=3.9.0
+
+# Solana on-chain interaction
+# Recommended versions per pump_fun_py reference bot
 solana>=0.36.1
 solders>=0.23.0
 base58>=2.1.1
+
+# HTTP / WebSocket
+websockets>=12.0
+aiohttp>=3.9.0
+
+# Config & display
 python-dotenv>=1.0.0
 rich>=13.7.0
 pydantic>=2.5.0

@@ -37,6 +37,8 @@ class TokenEvent:
     initial_buy_sol: float = 0.0
     initial_market_cap: float = 0.0
     trade_count: int = 0
+    # Bonding curve virtual reserves at creation time
+    v_sol_reserves: float = 0.0
 
 
 @dataclass
@@ -48,6 +50,8 @@ class TradeEvent:
     sol_amount: float
     token_amount: float
     new_market_cap: float
+    # Latest virtual SOL reserves for bonding curve math
+    v_sol_reserves: float = 0.0
     timestamp: float = field(default_factory=time.time)
 
 
