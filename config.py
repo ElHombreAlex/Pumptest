@@ -11,7 +11,7 @@ load_dotenv()
 class Config:
     # ── Anthropic / Claude ────────────────────────────────────────────────────
     ANTHROPIC_API_KEY: str = os.getenv("ANTHROPIC_API_KEY", "")
-    CLAUDE_MODEL: str = os.getenv("CLAUDE_MODEL", "claude-sonnet-4-6")
+    ANTHROPIC_MODEL: str = os.getenv("ANTHROPIC_MODEL", "claude-haiku-4-5-20251001")
 
     # ── Solana wallet ─────────────────────────────────────────────────────────
     WALLET_PRIVATE_KEY: str = os.getenv("WALLET_PRIVATE_KEY", "")  # base58

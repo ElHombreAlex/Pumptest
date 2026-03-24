@@ -141,7 +141,7 @@ class TokenAnalyzer:
 
         try:
             response = self._client.messages.create(
-                model=cfg.CLAUDE_MODEL,
+                model=cfg.ANTHROPIC_MODEL,
                 max_tokens=512,
                 system=_SYSTEM_PROMPT,
                 messages=[{"role": "user", "content": user_msg}],
