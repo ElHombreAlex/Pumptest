@@ -175,6 +175,9 @@ class TradeExecutor:
                         return None
                     data = await resp.read()
                     return data
+        except asyncio.TimeoutError:
+            log.error("PumpPortal API timed out after 15s building %s tx", action)
+            return None
         except aiohttp.ClientError as exc:
             log.error("HTTP error building tx: %s", exc)
             return None
@@ -210,7 +213,7 @@ class TradeExecutor:
             try:
                 result = await rpc.send_raw_transaction(
                     serialised,
-                    opts=TxOpts(skip_preflight=False, preflight_commitment="confirmed"),
+                    opts=TxOpts(skip_preflight=True, preflight_commitment="confirmed"),
                 )
                 if result.value:
                     if i > 0:
