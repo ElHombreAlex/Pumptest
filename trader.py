@@ -49,10 +49,20 @@ class TradeExecutor:
 
     # ── Buy ───────────────────────────────────────────────────────────────────
 
-    async def buy(self, token: TokenEvent, analysis: AnalysisResult) -> Optional[Position]:
+    async def buy(
+        self,
+        token: TokenEvent,
+        analysis: AnalysisResult,
+        entry_market_cap: Optional[float] = None,
+    ) -> Optional[Position]:
         """
         Execute a buy order.
         Returns an open Position on success, None on failure.
+
+        ``entry_market_cap`` should be the most recent observed market cap at
+        the time the buy decision is made (from the live trade stream), so that
+        PnL is calculated against the actual entry price rather than the
+        token-creation market cap (which can be 20+ seconds stale).
         """
         buy_sol = min(analysis.suggested_buy_sol, cfg.MAX_BUY_SOL)
         if buy_sol <= 0:
@@ -68,7 +78,7 @@ class TradeExecutor:
 
         if self._dry_run:
             log.info("[DRY-RUN] Would buy %s with %.4f SOL", token.symbol, buy_sol)
-            return _make_position(token, analysis, buy_sol, simulated=True)
+            return _make_position(token, analysis, buy_sol, entry_market_cap, simulated=True)
 
         tx_bytes = await self._build_tx(
             action="buy",
@@ -84,7 +94,7 @@ class TradeExecutor:
             return None
 
         log.info("[%s] Buy confirmed: %s", token.symbol, sig)
-        return _make_position(token, analysis, buy_sol, simulated=False)
+        return _make_position(token, analysis, buy_sol, entry_market_cap, simulated=False)
 
     # ── Sell ──────────────────────────────────────────────────────────────────
 
@@ -228,9 +238,13 @@ def _make_position(
     token: TokenEvent,
     analysis: AnalysisResult,
     buy_sol: float,
+    entry_market_cap: Optional[float],
     simulated: bool,
 ) -> Position:
-    mcap = token.initial_market_cap or 1.0
+    # Use the live market cap at buy time when available; fall back to the
+    # creation-event market cap (which may be 20+ seconds stale by now).
+    mcap = (entry_market_cap if entry_market_cap and entry_market_cap > 0
+            else token.initial_market_cap) or 1.0
     # Rough estimate: tokens received = (SOL * total_supply / mcap)
     # We track value in market-cap terms rather than exact token amount
     token_amount = (buy_sol / mcap) * 1_000_000_000  # normalised units

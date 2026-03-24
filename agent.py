@@ -200,7 +200,15 @@ class TradingAgent:
                 and self._risk.can_open_position()
                 and not self._risk.is_tracking(token.mint)
             ):
-                position = await self._executor.buy(token, analysis)
+                # Use the most recent observed market cap as the entry price so
+                # PnL reflects our actual cost basis, not the token-creation
+                # market cap which is 20+ seconds stale by the time we buy.
+                recent_trades = list(self._trade_buffer[token.mint])
+                current_mcap = next(
+                    (t.new_market_cap for t in reversed(recent_trades) if t.new_market_cap),
+                    None,
+                )
+                position = await self._executor.buy(token, analysis, entry_market_cap=current_mcap)
                 if position:
                     self._risk.add_position(position)
             else:

@@ -85,13 +85,26 @@ class RiskManager:
         if not pos:
             return
 
-        pos.current_market_cap = event.new_market_cap
-        pos.pnl_sol = (
-            pos.entry_sol * (event.new_market_cap / pos.entry_market_cap) - pos.entry_sol
-        )
+        if not event.new_market_cap:
+            # PumpPortal occasionally omits marketCapSol — skip the update
+            # rather than zeroing the position's market cap.
+            return
 
-        log.debug(
-            "[%s] mcap=%.2f | pnl=%.4f SOL | TP=%.2f | SL=%.2f",
+        pos.current_market_cap = event.new_market_cap
+
+        # P&L formula: (current_price - entry_price) × tokens_held
+        # All prices are in SOL-per-token (market_cap / total_supply).
+        # token_amount is already normalised to the same 1e9 basis as the mcap
+        # figures, so the units cancel correctly:
+        #   pnl = Δ(mcap) / 1e9 × token_amount  =  entry_sol × Δ(mcap) / entry_mcap
+        if pos.entry_price_per_token > 0:
+            current_price_per_token = event.new_market_cap / 1_000_000_000
+            pos.pnl_sol = (current_price_per_token - pos.entry_price_per_token) * pos.token_amount
+        else:
+            pos.pnl_sol = 0.0
+
+        log.info(
+            "[%s] mcap=%.2f SOL | pnl=%+.4f SOL | TP=%.2f | SL=%.2f",
             pos.symbol,
             pos.current_market_cap,
             pos.pnl_sol,
