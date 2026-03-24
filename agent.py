@@ -33,9 +33,6 @@ from persistence import PositionStore
 
 log = logging.getLogger(__name__)
 
-# How long / how many trades to wait before analysing a new token
-WARM_UP_TRADES = 3       # collect at least N trades before asking Claude
-WARM_UP_SECS = 10        # … or wait this many seconds, whichever comes first
 SUMMARY_INTERVAL = 60    # print portfolio summary every N seconds
 
 # Evict decided/untracked tokens from the in-memory cache after this long
@@ -117,7 +114,7 @@ class TradingAgent:
         await self._client.subscribe_token(token.mint)
         self._token_seen_at[token.mint] = time.time()
 
-        # Schedule warm-up analysis; will fire after WARM_UP_SECS even if
+        # Schedule warm-up analysis; will fire after WARM_UP_SECONDS even if
         # fewer than WARM_UP_TRADES trades have arrived.
         asyncio.create_task(
             self._safe_warm_up_and_analyse(token),
@@ -137,7 +134,7 @@ class TradingAgent:
         if (
             event.mint not in self._decided
             and event.mint not in self._analysing
-            and len(buf) >= WARM_UP_TRADES
+            and len(buf) >= cfg.WARM_UP_TRADES
         ):
             token = self._token_cache.get(event.mint)
             if token:
@@ -151,7 +148,7 @@ class TradingAgent:
     async def _safe_warm_up_and_analyse(self, token: TokenEvent) -> None:
         """Error-bounded wrapper for the warm-up timer task."""
         try:
-            await asyncio.sleep(WARM_UP_SECS)
+            await asyncio.sleep(cfg.WARM_UP_SECONDS)
             if token.mint not in self._decided and token.mint not in self._analysing:
                 await self._analyse_and_trade(token)
         except Exception:

@@ -56,6 +56,12 @@ class Config:
     # Only analyze if initial buy activity meets threshold (SOL volume in first trades)
     MIN_INITIAL_SOL_VOLUME: float = float(os.getenv("MIN_INITIAL_SOL_VOLUME", "0.5"))
 
+    # ── Warm-up window before Claude analysis ─────────────────────────────────
+    # Collect at least this many trades before asking Claude to score a token
+    WARM_UP_TRADES: int = int(os.getenv("WARM_UP_TRADES", "10"))
+    # …or wait this many seconds after token creation, whichever comes first
+    WARM_UP_SECONDS: int = int(os.getenv("WARM_UP_SECONDS", "20"))
+
     # ── Dry-run mode: log decisions but don't send transactions ───────────────
     DRY_RUN: bool = os.getenv("DRY_RUN", "true").lower() == "true"
 
