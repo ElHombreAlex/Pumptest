@@ -14,9 +14,22 @@ import anthropic
 
 from config import cfg
 from models import AnalysisResult, TokenEvent, TradeEvent
-from bonding_curve import BondingCurveCalculator, BondingCurveState
+from bonding_curve import (
+    BondingCurveCalculator,
+    BondingCurveState,
+    INITIAL_VIRTUAL_TOKEN_RESERVES,
+    INITIAL_VIRTUAL_SOL_RESERVES,
+    INITIAL_REAL_TOKEN_RESERVES,
+)
 
 log = logging.getLogger(__name__)
+
+# Difference between virtual and real token reserves at genesis.
+# Used to derive real_token_reserves from the live virtual value.
+_VIRTUAL_TOKEN_OFFSET = INITIAL_VIRTUAL_TOKEN_RESERVES - INITIAL_REAL_TOKEN_RESERVES
+
+# Initial virtual SOL in decimal SOL (30 SOL), used to derive real_sol_reserves.
+_INITIAL_VIRTUAL_SOL = INITIAL_VIRTUAL_SOL_RESERVES / 1e9  # lamports → SOL
 
 _SYSTEM_PROMPT = """\
 You are an expert Solana memecoin analyst specialising in Pump.fun token launches.
@@ -101,14 +114,7 @@ class TokenAnalyzer:
             return self._cache[token.mint]
 
         trade_summary = _format_trades(recent_trades)
-
-        # Compute bonding curve metrics if we have reserve data
-        bc_state = BondingCurveState(
-            virtual_token_reserves=1_073_000_000_000_000,  # approximation if no live data
-            virtual_sol_reserves=max(token.v_sol_reserves, 30.0),
-            real_token_reserves=793_100_000_000_000,
-            real_sol_reserves=0.0,
-        )
+        bc_state = _build_bonding_curve_state(token, recent_trades)
         graduation_pct = bc_state.graduation_progress_pct
         price_impact = BondingCurveCalculator.price_impact_pct(bc_state, cfg.MAX_BUY_SOL)
 
@@ -140,16 +146,29 @@ class TokenAnalyzer:
                 system=_SYSTEM_PROMPT,
                 messages=[{"role": "user", "content": user_msg}],
             )
+
+            # Validate response structure before accessing fields
+            if not response.content or not hasattr(response.content[0], "text"):
+                raise ValueError("Unexpected Claude response structure")
+
             raw = response.content[0].text.strip()
             payload: dict[str, Any] = json.loads(raw)
 
+            # Clamp numeric fields to valid ranges — Claude can occasionally
+            # return out-of-bounds values that would corrupt position sizing.
+            raw_score = payload.get("confidence_score", 0)
+            confidence_score = max(0, min(100, int(raw_score)))
+
+            raw_buy = payload.get("suggested_buy_sol", 0.0)
+            suggested_buy_sol = max(0.0, float(raw_buy))
+
             result = AnalysisResult(
                 mint=token.mint,
-                confidence_score=int(payload.get("confidence_score", 0)),
+                confidence_score=confidence_score,
                 recommendation=payload.get("recommendation", "SKIP"),
                 reasoning=payload.get("reasoning", ""),
                 risk_flags=payload.get("risk_flags", []),
-                suggested_buy_sol=float(payload.get("suggested_buy_sol", 0.0)),
+                suggested_buy_sol=suggested_buy_sol,
             )
 
         except json.JSONDecodeError as exc:
@@ -158,12 +177,66 @@ class TokenAnalyzer:
         except anthropic.APIError as exc:
             log.error("Anthropic API error: %s", exc)
             result = _skip_result(token.mint, f"API error: {exc}")
+        except Exception as exc:
+            log.error("Unexpected error analysing %s: %s", token.mint[:8], exc)
+            result = _skip_result(token.mint, f"Unexpected error: {exc}")
 
         self._cache[token.mint] = result
         return result
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
+
+def _build_bonding_curve_state(
+    token: TokenEvent,
+    recent_trades: list[TradeEvent],
+) -> BondingCurveState:
+    """
+    Build a BondingCurveState from the freshest available reserve data.
+
+    Priority order:
+      1. Most recent trade event (most up-to-date snapshot)
+      2. Token creation event (close to genesis state)
+      3. Hard-coded initial constants (fallback if API omits reserve fields)
+
+    Real reserves are derived from virtual reserves by subtracting the fixed
+    virtual offsets baked into pump.fun's initial curve state:
+      real_sol    = v_sol    - 30 SOL      (initial virtual SOL offset)
+      real_tokens = v_tokens - 279.9T base units  (virtual − real at genesis)
+    """
+    v_sol: float = 0.0
+    v_tokens: float = 0.0
+
+    # Try the most recent trade first
+    for trade in reversed(recent_trades):
+        if trade.v_sol_reserves > 0 and trade.v_token_reserves > 0:
+            v_sol = trade.v_sol_reserves
+            v_tokens = trade.v_token_reserves
+            break
+
+    # Fall back to token creation event
+    if not v_sol and token.v_sol_reserves > 0:
+        v_sol = token.v_sol_reserves
+    if not v_tokens and token.v_token_reserves > 0:
+        v_tokens = token.v_token_reserves
+
+    # Final fallback: initial genesis constants
+    if not v_sol:
+        v_sol = _INITIAL_VIRTUAL_SOL
+    if not v_tokens:
+        v_tokens = float(INITIAL_VIRTUAL_TOKEN_RESERVES)
+
+    # Derive real reserves from virtual reserves
+    real_tokens = max(0.0, v_tokens - _VIRTUAL_TOKEN_OFFSET)
+    real_sol = max(0.0, v_sol - _INITIAL_VIRTUAL_SOL)
+
+    return BondingCurveState(
+        virtual_token_reserves=v_tokens,
+        virtual_sol_reserves=v_sol,
+        real_token_reserves=real_tokens,
+        real_sol_reserves=real_sol,
+    )
+
 
 def _format_trades(trades: list[TradeEvent]) -> str:
     if not trades:

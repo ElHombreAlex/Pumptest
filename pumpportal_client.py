@@ -169,8 +169,9 @@ def _parse_token_event(data: dict) -> TokenEvent | None:
             # initialBuy = token amount; estimate SOL via market cap ratio
             initial_buy_sol=_estimate_initial_buy_sol(data),
             initial_market_cap=data.get("marketCapSol", 0.0),
-            # Store virtual reserves for bonding curve math
+            # Virtual reserve snapshot for bonding curve math
             v_sol_reserves=data.get("vSolInBondingCurve", 0.0),
+            v_token_reserves=data.get("vTokensInBondingCurve", 0.0),
         )
     except Exception as exc:
         log.debug("Could not parse token event: %s | %s", exc, data)
@@ -199,6 +200,7 @@ def _parse_trade_event(data: dict) -> TradeEvent | None:
             token_amount=float(token_amt),
             new_market_cap=data.get("marketCapSol", 0.0),
             v_sol_reserves=data.get("vSolInBondingCurve", 0.0),
+            v_token_reserves=data.get("vTokensInBondingCurve", 0.0),
             timestamp=data.get("timestamp", time.time()),
         )
     except Exception as exc:

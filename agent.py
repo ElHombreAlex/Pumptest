@@ -13,6 +13,8 @@ Flow:
   4. If the score meets MIN_CONFIDENCE_SCORE and we have capacity, we buy.
   5. RiskManager watches the trade stream and exits positions at TP/SL.
   6. A periodic summary is printed to the console.
+  7. Stale token metadata is evicted from memory every TOKEN_CACHE_TTL seconds
+     to keep long-running sessions lean.
 """
 from __future__ import annotations
 
@@ -27,6 +29,7 @@ from pumpportal_client import PumpPortalClient
 from analyzer import TokenAnalyzer
 from trader import TradeExecutor
 from risk_manager import RiskManager
+from persistence import PositionStore
 
 log = logging.getLogger(__name__)
 
@@ -34,6 +37,10 @@ log = logging.getLogger(__name__)
 WARM_UP_TRADES = 3       # collect at least N trades before asking Claude
 WARM_UP_SECS = 10        # … or wait this many seconds, whichever comes first
 SUMMARY_INTERVAL = 60    # print portfolio summary every N seconds
+
+# Evict decided/untracked tokens from the in-memory cache after this long
+TOKEN_CACHE_TTL = 1800   # 30 minutes
+EVICTION_INTERVAL = 300  # run eviction sweep every 5 minutes
 
 
 class TradingAgent:
@@ -45,17 +52,27 @@ class TradingAgent:
         self._client = PumpPortalClient()
         self._analyzer = TokenAnalyzer()
         self._executor = TradeExecutor()
-        self._risk = RiskManager(sell_fn=self._executor.sell)
 
-        # mint → list of recent trades (ring buffer)
+        # Initialise persistence store and restore any positions that were open
+        # before the last shutdown
+        self._store = PositionStore()
+        self._risk = RiskManager(sell_fn=self._executor.sell, store=self._store)
+
+        restored = self._store.load_open()
+        for pos in restored:
+            self._risk.restore_position(pos)
+        if restored:
+            log.info("Restored %d open position(s) from database", len(restored))
+
+        # mint → ring buffer of recent trades (size capped by deque maxlen)
         self._trade_buffer: dict[str, collections.deque[TradeEvent]] = (
             collections.defaultdict(lambda: collections.deque(maxlen=20))
         )
-        # mint → timestamp when we first saw the token
+        # mint → unix timestamp when we first saw this token
         self._token_seen_at: dict[str, float] = {}
-        # mints currently being analysed (avoid duplicate analysis)
+        # mints currently being analysed (prevent duplicate concurrent analysis)
         self._analysing: set[str] = set()
-        # tokens we've already decided on (buy or skip)
+        # tokens we've already made a decision on (buy or skip)
         self._decided: set[str] = set()
         # token metadata cache: mint → TokenEvent
         self._token_cache: dict[str, TokenEvent] = {}
@@ -67,16 +84,20 @@ class TradingAgent:
         self._client.on_new_token(self._on_new_token)
         self._client.on_new_trade(self._on_trade)
 
+        # Re-subscribe to mints we still have open positions for
+        for mint in self._risk.open_mints():
+            await self._client.subscribe_token(mint)
+
         await asyncio.gather(
             self._client.run(),
             self._summary_loop(),
+            self._eviction_loop(),
         )
 
     # ── Callbacks ─────────────────────────────────────────────────────────────
 
     async def _on_new_token(self, token: TokenEvent) -> None:
         """Fired when PumpPortal reports a new token creation."""
-        # Cache metadata for later trade-event lookups
         self._token_cache[token.mint] = token
 
         log.info(
@@ -98,7 +119,10 @@ class TradingAgent:
 
         # Schedule warm-up analysis; will fire after WARM_UP_SECS even if
         # fewer than WARM_UP_TRADES trades have arrived.
-        asyncio.create_task(self._warm_up_and_analyse(token))
+        asyncio.create_task(
+            self._safe_warm_up_and_analyse(token),
+            name=f"warmup-{token.mint[:8]}",
+        )
 
     async def _on_trade(self, event: TradeEvent) -> None:
         """Fired for every trade on a tracked token."""
@@ -117,15 +141,41 @@ class TradingAgent:
         ):
             token = self._token_cache.get(event.mint)
             if token:
-                asyncio.create_task(self._analyse_and_trade(token))
+                asyncio.create_task(
+                    self._safe_analyse_and_trade(token),
+                    name=f"analyse-{token.mint[:8]}",
+                )
 
     # ── Core logic ────────────────────────────────────────────────────────────
 
-    async def _warm_up_and_analyse(self, token: TokenEvent) -> None:
-        """Wait for the warm-up period, then trigger analysis if not yet decided."""
-        await asyncio.sleep(WARM_UP_SECS)
-        if token.mint not in self._decided and token.mint not in self._analysing:
+    async def _safe_warm_up_and_analyse(self, token: TokenEvent) -> None:
+        """Error-bounded wrapper for the warm-up timer task."""
+        try:
+            await asyncio.sleep(WARM_UP_SECS)
+            if token.mint not in self._decided and token.mint not in self._analysing:
+                await self._analyse_and_trade(token)
+        except Exception:
+            log.exception(
+                "Unhandled error in warm-up task for %s (%s)",
+                token.symbol,
+                token.mint[:8],
+            )
+            # Prevent this token from being retried endlessly
+            self._decided.add(token.mint)
+            self._analysing.discard(token.mint)
+
+    async def _safe_analyse_and_trade(self, token: TokenEvent) -> None:
+        """Error-bounded wrapper for the trade-triggered analysis task."""
+        try:
             await self._analyse_and_trade(token)
+        except Exception:
+            log.exception(
+                "Unhandled error analysing %s (%s)",
+                token.symbol,
+                token.mint[:8],
+            )
+            self._decided.add(token.mint)
+            self._analysing.discard(token.mint)
 
     async def _analyse_and_trade(self, token: TokenEvent) -> None:
         if token.mint in self._decided or token.mint in self._analysing:
@@ -162,7 +212,7 @@ class TradingAgent:
                     token.symbol,
                     analysis.confidence_score,
                     analysis.recommendation,
-                    len(self._risk._positions),
+                    self._risk.position_count(),
                     cfg.MAX_POSITIONS,
                 )
                 # Unsubscribe to keep the WebSocket connection lean
@@ -171,9 +221,38 @@ class TradingAgent:
         finally:
             self._analysing.discard(token.mint)
 
-    # ── Portfolio summary loop ────────────────────────────────────────────────
+    # ── Background loops ──────────────────────────────────────────────────────
 
     async def _summary_loop(self) -> None:
         while True:
             await asyncio.sleep(SUMMARY_INTERVAL)
             log.info("\n%s", self._risk.summary())
+
+    async def _eviction_loop(self) -> None:
+        """
+        Periodically purge stale token metadata from memory.
+
+        Only evicts tokens that:
+          - We have already made a decision on (buy or skip), AND
+          - Are not currently tracked by the risk manager (no open position), AND
+          - Were first seen more than TOKEN_CACHE_TTL seconds ago
+        """
+        while True:
+            await asyncio.sleep(EVICTION_INTERVAL)
+            now = time.time()
+            stale = [
+                mint
+                for mint, seen_at in self._token_seen_at.items()
+                if (
+                    now - seen_at > TOKEN_CACHE_TTL
+                    and mint in self._decided
+                    and not self._risk.is_tracking(mint)
+                )
+            ]
+            for mint in stale:
+                self._token_cache.pop(mint, None)
+                self._token_seen_at.pop(mint, None)
+                self._decided.discard(mint)
+                self._trade_buffer.pop(mint, None)
+            if stale:
+                log.debug("Evicted %d stale token entries from memory", len(stale))

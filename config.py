@@ -21,6 +21,13 @@ class Config:
     SOLANA_RPC_URL: str = os.getenv(
         "SOLANA_RPC_URL", "https://api.mainnet-beta.solana.com"
     )
+    # Optional comma-separated list of fallback RPC endpoints tried in order
+    # when the primary endpoint fails or rate-limits a transaction
+    SOLANA_RPC_FALLBACK_URLS: list[str] = [
+        u.strip()
+        for u in os.getenv("SOLANA_RPC_FALLBACK_URLS", "").split(",")
+        if u.strip()
+    ]
 
     # ── PumpPortal API ────────────────────────────────────────────────────────
     PUMPPORTAL_WS_URL: str = "wss://pumpportal.fun/api/data"

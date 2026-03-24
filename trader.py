@@ -8,12 +8,11 @@ Supports two modes:
 The flow for a real trade:
   1. POST to pumpportal.fun/api/trade-local → receive unsigned serialised tx
   2. Deserialise with solders
-  3. Sign with local wallet keypair
-  4. Send via Solana JSON-RPC
+  3. Sign with local wallet keypair using VersionedTransaction(message, [keypair])
+  4. Send via Solana JSON-RPC; fall back to secondary endpoints on failure
 """
 from __future__ import annotations
 
-import base64
 import logging
 from typing import Optional
 
@@ -35,11 +34,14 @@ class TradeExecutor:
     def __init__(self) -> None:
         self._dry_run = cfg.DRY_RUN
         self._keypair: Optional[Keypair] = None
-        self._rpc: Optional[AsyncClient] = None
+        self._rpc_clients: list[AsyncClient] = []
 
         if not self._dry_run:
             self._keypair = _load_keypair(cfg.WALLET_PRIVATE_KEY)
-            self._rpc = AsyncClient(cfg.SOLANA_RPC_URL)
+            # Primary RPC first, then any configured fallbacks
+            urls = [cfg.SOLANA_RPC_URL] + cfg.SOLANA_RPC_FALLBACK_URLS
+            self._rpc_clients = [AsyncClient(url) for url in urls if url]
+            log.info("Loaded %d RPC endpoint(s)", len(self._rpc_clients))
 
     # ── Buy ───────────────────────────────────────────────────────────────────
 
@@ -164,31 +166,45 @@ class TradeExecutor:
             return None
 
     async def _sign_and_send(self, tx_bytes: bytes) -> Optional[str]:
-        """Deserialise, sign, and broadcast the transaction."""
+        """
+        Deserialise, sign, and broadcast the transaction.
+
+        Signing: VersionedTransaction(message, [keypair]) is the correct solders
+        API — it embeds the signature in the proper Solana transaction format.
+        The old sign_message() call was wrong: it produces a raw Ed25519 sig
+        without the transaction context, which the network always rejects.
+
+        RPC failover: tries each configured endpoint in order; moves on if one
+        fails so a single bad/rate-limited RPC doesn't block the trade.
+        """
         assert self._keypair is not None
-        assert self._rpc is not None
 
+        # Deserialise the unsigned tx returned by PumpPortal, then re-sign it.
         try:
-            tx = VersionedTransaction.from_bytes(tx_bytes)
-            signed_tx = self._keypair.sign_message(
-                bytes(tx.message)
-            )
-
-            # Re-attach signature
-            tx.signatures[0] = signed_tx
-            serialised = bytes(tx)
-
-            result = await self._rpc.send_raw_transaction(
-                serialised,
-                opts=TxOpts(skip_preflight=False, preflight_commitment="confirmed"),
-            )
-            if result.value:
-                return str(result.value)
-            log.error("send_raw_transaction returned no signature: %s", result)
-            return None
+            unsigned_tx = VersionedTransaction.from_bytes(tx_bytes)
+            signed_tx = VersionedTransaction(unsigned_tx.message, [self._keypair])
+            serialised = bytes(signed_tx)
         except Exception as exc:
-            log.exception("Error signing/sending transaction: %s", exc)
+            log.exception("Failed to deserialise/sign transaction: %s", exc)
             return None
+
+        # Try each RPC in order; return the first successful signature
+        for i, rpc in enumerate(self._rpc_clients):
+            try:
+                result = await rpc.send_raw_transaction(
+                    serialised,
+                    opts=TxOpts(skip_preflight=False, preflight_commitment="confirmed"),
+                )
+                if result.value:
+                    if i > 0:
+                        log.info("Transaction landed via fallback RPC #%d", i)
+                    return str(result.value)
+                log.warning("RPC #%d returned no signature: %s", i, result)
+            except Exception as exc:
+                log.warning("RPC #%d failed: %s", i, exc)
+
+        log.error("All %d RPC endpoint(s) failed for this transaction", len(self._rpc_clients))
+        return None
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
