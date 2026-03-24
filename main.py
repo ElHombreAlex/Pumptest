@@ -28,7 +28,7 @@ LOG_FILE = "trading.log"
 
 def _setup_logging() -> None:
     # Console handler — rich formatting for interactive use
-    console_handler = RichHandler(rich_tracebacks=True, markup=True)
+    console_handler = RichHandler(rich_tracebacks=True, markup=False)
     console_handler.setFormatter(logging.Formatter("%(message)s", datefmt="[%X]"))
 
     # File handler — DEBUG level so raw WS frames and other diagnostic
@@ -72,7 +72,7 @@ async def main() -> None:
 
     log = logging.getLogger("main")
 
-    mode = "[bold yellow]DRY-RUN[/bold yellow]" if cfg.DRY_RUN else "[bold red]LIVE TRADING[/bold red]"
+    mode = "DRY-RUN" if cfg.DRY_RUN else "LIVE TRADING"
     log.info("Starting Pump.fun AI Trading Agent — %s", mode)
     log.info(
         "Settings: max_buy=%.4f SOL | min_score=%d | max_positions=%d | TP=×%.1f | SL=×%.1f",
