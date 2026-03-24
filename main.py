@@ -23,13 +23,25 @@ from rich.logging import RichHandler
 from config import cfg
 
 
+LOG_FILE = "trading.log"
+
+
 def _setup_logging() -> None:
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(message)s",
-        datefmt="[%X]",
-        handlers=[RichHandler(rich_tracebacks=True, markup=True)],
+    # Console handler — rich formatting for interactive use
+    console_handler = RichHandler(rich_tracebacks=True, markup=True)
+    console_handler.setFormatter(logging.Formatter("%(message)s", datefmt="[%X]"))
+
+    # File handler — plain timestamped lines for tailing / monitoring
+    file_handler = logging.FileHandler(LOG_FILE, encoding="utf-8")
+    file_handler.setFormatter(
+        logging.Formatter(
+            fmt="%(asctime)s  %(levelname)-8s  %(name)s  %(message)s",
+            datefmt="%Y-%m-%d %H:%M:%S",
+        )
     )
+
+    logging.basicConfig(level=logging.INFO, handlers=[console_handler, file_handler])
+
     # Quiet noisy libraries
     for lib in ("websockets", "asyncio", "aiohttp"):
         logging.getLogger(lib).setLevel(logging.WARNING)
