@@ -142,7 +142,7 @@ class TradeExecutor:
             "denominatedInSol": str(denominated_in_sol).lower(),
             "slippage": cfg.SLIPPAGE,
             "priorityFee": cfg.PRIORITY_FEE,
-            "pool": "pump",
+            "pool": "auto",
         }
 
         headers = {}

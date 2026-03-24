@@ -300,8 +300,11 @@ def _build_bonding_curve_state(
     if not v_tokens:
         v_tokens = float(INITIAL_VIRTUAL_TOKEN_RESERVES)
 
-    # Derive real reserves from virtual reserves
-    real_tokens = max(0.0, v_tokens - _VIRTUAL_TOKEN_OFFSET)
+    # PumpPortal returns vTokensInBondingCurve in decimal token units (~1e9),
+    # but the bonding curve constants (_VIRTUAL_TOKEN_OFFSET) are in base units
+    # (6 decimal places, ~1e15). Convert before subtracting.
+    v_tokens_base = v_tokens * 1_000_000
+    real_tokens = max(0.0, v_tokens_base - _VIRTUAL_TOKEN_OFFSET)
     real_sol = max(0.0, v_sol - _INITIAL_VIRTUAL_SOL)
 
     return BondingCurveState(
