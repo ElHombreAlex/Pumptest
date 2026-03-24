@@ -15,6 +15,7 @@ from typing import Callable, Awaitable
 import websockets
 from websockets.exceptions import ConnectionClosed
 
+from config import cfg
 from models import TokenEvent, TradeEvent, TradeAction
 
 log = logging.getLogger(__name__)
@@ -23,7 +24,7 @@ log = logging.getLogger(__name__)
 TokenCallback = Callable[[TokenEvent], Awaitable[None]]
 TradeCallback = Callable[[TradeEvent], Awaitable[None]]
 
-PUMPPORTAL_WS = "wss://pumpportal.fun/api/data"
+PUMPPORTAL_WS_BASE = "wss://pumpportal.fun/api/data"
 RECONNECT_DELAY = 5  # seconds between reconnect attempts
 
 
@@ -95,9 +96,16 @@ class PumpPortalClient:
     # ── Internal ──────────────────────────────────────────────────────────────
 
     async def _connect_and_listen(self) -> None:
-        log.info("Connecting to PumpPortal WebSocket …")
+        # Append the API key as a query parameter when one is configured.
+        # PumpPortal authenticates WebSocket connections via the URL, not headers.
+        ws_url = PUMPPORTAL_WS_BASE
+        if cfg.PUMPPORTAL_API_KEY:
+            ws_url = f"{PUMPPORTAL_WS_BASE}?api-key={cfg.PUMPPORTAL_API_KEY}"
+
+        log.info("Connecting to PumpPortal WebSocket %s…",
+                 "(authenticated) " if cfg.PUMPPORTAL_API_KEY else "(unauthenticated) ")
         async with websockets.connect(
-            PUMPPORTAL_WS,
+            ws_url,
             ping_interval=20,
             ping_timeout=10,
             close_timeout=5,
