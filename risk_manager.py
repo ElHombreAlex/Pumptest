@@ -36,11 +36,15 @@ class RiskManager:
         self._store = store
         self._positions: dict[str, Position] = {}   # mint → Position
         self._closed: list[Position] = []
+        # mint → unix timestamp of the last trade event that updated this position.
+        # Initialised to now() on add/restore so the stale window starts fresh.
+        self._last_trade_at: dict[str, float] = {}
 
     # ── Position management ───────────────────────────────────────────────────
 
     def add_position(self, position: Position) -> None:
         self._positions[position.mint] = position
+        self._last_trade_at[position.mint] = time.time()
         if self._store:
             self._store.save(position)
         log.info(
@@ -54,6 +58,9 @@ class RiskManager:
     def restore_position(self, position: Position) -> None:
         """Re-load a position from persistent storage without saving it again."""
         self._positions[position.mint] = position
+        # Give the position a fresh stale window — we just re-subscribed to its
+        # trade stream, so give it STALE_POSITION_MINUTES before flagging it.
+        self._last_trade_at[position.mint] = time.time()
         log.info(
             "Restored position: %s | entry_mcap=%.2f | current_mcap=%.2f",
             position.symbol,
@@ -74,6 +81,24 @@ class RiskManager:
         """Return the mint addresses of all currently open positions."""
         return list(self._positions.keys())
 
+    def stale_positions(self, threshold_seconds: float) -> list[Position]:
+        """
+        Return open positions that haven't received a trade update in
+        threshold_seconds.  A position is considered live immediately after
+        add/restore, so the clock starts fresh on each restart.
+        """
+        now = time.time()
+        return [
+            pos for mint, pos in self._positions.items()
+            if now - self._last_trade_at.get(mint, 0) > threshold_seconds
+        ]
+
+    async def trigger_close(self, mint: str, reason: str) -> None:
+        """Initiate a close for an open position by mint (e.g., staleness)."""
+        pos = self._positions.get(mint)
+        if pos:
+            await self._close_position(pos, reason)
+
     # ── Real-time price update ────────────────────────────────────────────────
 
     async def on_trade(self, event: TradeEvent) -> None:
@@ -91,6 +116,7 @@ class RiskManager:
             return
 
         pos.current_market_cap = event.new_market_cap
+        self._last_trade_at[pos.mint] = time.time()
 
         # P&L formula: (current_price - entry_price) × tokens_held
         # All prices are in SOL-per-token (market_cap / total_supply).
@@ -182,6 +208,7 @@ class RiskManager:
                 pos.status = PositionStatus.CLOSED
                 pos.closed_at = time.time()
                 del self._positions[pos.mint]
+                self._last_trade_at.pop(pos.mint, None)
                 self._closed.append(pos)
                 if self._store:
                     self._store.save(pos)

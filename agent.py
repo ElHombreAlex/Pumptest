@@ -34,6 +34,7 @@ from persistence import PositionStore
 log = logging.getLogger(__name__)
 
 SUMMARY_INTERVAL = 60    # print portfolio summary every N seconds
+STALE_CHECK_INTERVAL = 60  # check for stale positions every N seconds
 
 # Evict decided/untracked tokens from the in-memory cache after this long
 TOKEN_CACHE_TTL = 1800   # 30 minutes
@@ -89,6 +90,7 @@ class TradingAgent:
             self._client.run(),
             self._summary_loop(),
             self._eviction_loop(),
+            self._stale_position_loop(),
         )
 
     # ── Callbacks ─────────────────────────────────────────────────────────────
@@ -261,3 +263,26 @@ class TradingAgent:
                 self._trade_buffer.pop(mint, None)
             if stale:
                 log.debug("Evicted %d stale token entries from memory", len(stale))
+
+    async def _stale_position_loop(self) -> None:
+        """
+        Periodically check for open positions that haven't received a trade
+        update in cfg.STALE_POSITION_MINUTES minutes.
+
+        A stale position means the token has gone dark (no buyers/sellers) —
+        either it dumped to zero or it's so illiquid that TP/SL will never
+        fire on its own.  We log a warning and attempt to sell immediately.
+        """
+        threshold = cfg.STALE_POSITION_MINUTES * 60
+        while True:
+            await asyncio.sleep(STALE_CHECK_INTERVAL)
+            for pos in self._risk.stale_positions(threshold):
+                log.warning(
+                    "[%s] Position stale — no trade update in %d min | "
+                    "mcap=%.2f SOL | pnl=%+.4f SOL — triggering sell",
+                    pos.symbol,
+                    cfg.STALE_POSITION_MINUTES,
+                    pos.current_market_cap,
+                    pos.pnl_sol,
+                )
+                await self._risk.trigger_close(pos.mint, reason="stale")

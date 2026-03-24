@@ -62,6 +62,11 @@ class Config:
     # …or wait this many seconds after token creation, whichever comes first
     WARM_UP_SECONDS: int = int(os.getenv("WARM_UP_SECONDS", "20"))
 
+    # ── Stale position eviction ───────────────────────────────────────────────
+    # If an open position hasn't received a trade update in this many minutes,
+    # it is considered stale (token is dead/illiquid) and a sell is triggered.
+    STALE_POSITION_MINUTES: int = int(os.getenv("STALE_POSITION_MINUTES", "30"))
+
     # ── Dry-run mode: log decisions but don't send transactions ───────────────
     DRY_RUN: bool = os.getenv("DRY_RUN", "true").lower() == "true"
 
