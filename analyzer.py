@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from typing import Any
 
 import anthropic
@@ -32,12 +33,12 @@ _VIRTUAL_TOKEN_OFFSET = INITIAL_VIRTUAL_TOKEN_RESERVES - INITIAL_REAL_TOKEN_RESE
 _INITIAL_VIRTUAL_SOL = INITIAL_VIRTUAL_SOL_RESERVES / 1e9  # lamports → SOL
 
 _SYSTEM_PROMPT = """\
+Respond with ONLY a raw JSON object, no markdown, no code blocks, no explanation.
+
 You are an expert Solana memecoin analyst specialising in Pump.fun token launches.
 Your job is to evaluate newly launched tokens and assess their short-term trading potential.
 
-You must output ONLY valid JSON — no markdown fences, no extra text.
-
-Output format:
+Output format — a single JSON object, nothing else:
 {
   "confidence_score": <integer 0-100>,
   "recommendation": "<BUY|WATCH|SKIP>",
@@ -64,6 +65,8 @@ Risk flags to check:
 - "low_liquidity"      — market cap below 2 SOL
 - "inactive_creator"   — creator has no on-chain history
 - "suspicious_name"    — all caps, excessive symbols, misleading
+
+Respond with ONLY a raw JSON object, no markdown, no code blocks, no explanation.\
 """
 
 _USER_TEMPLATE = """\
@@ -152,7 +155,7 @@ class TokenAnalyzer:
                 raise ValueError("Unexpected Claude response structure")
 
             raw = response.content[0].text.strip()
-            payload: dict[str, Any] = json.loads(raw)
+            payload: dict[str, Any] = _parse_json_response(raw)
 
             # Clamp numeric fields to valid ranges — Claude can occasionally
             # return out-of-bounds values that would corrupt position sizing.
@@ -172,7 +175,10 @@ class TokenAnalyzer:
             )
 
         except json.JSONDecodeError as exc:
-            log.error("Claude returned non-JSON for %s: %s", token.mint[:8], exc)
+            log.warning(
+                "Claude returned non-JSON for %s: %s | raw: %.200s",
+                token.mint[:8], exc, raw if "raw" in dir() else "<no response>",
+            )
             result = _skip_result(token.mint, "Claude response was not valid JSON")
         except anthropic.APIError as exc:
             log.error("Anthropic API error: %s", exc)
@@ -186,6 +192,50 @@ class TokenAnalyzer:
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
+
+def _parse_json_response(raw: str) -> dict[str, Any]:
+    """
+    Robustly extract a JSON object from Claude's response.
+
+    Attempt order:
+      1. Direct parse of the stripped response (ideal path)
+      2. Strip markdown code fences (```json ... ``` or ``` ... ```) then parse
+      3. Substring extraction — find the first '{' and last '}' and parse that
+
+    Raises json.JSONDecodeError if all three attempts fail, which the caller
+    catches and logs with the raw response for diagnosis.
+    """
+    # 1. Direct parse
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        pass
+
+    # 2. Strip markdown code fences and retry
+    cleaned = raw
+    if "```" in cleaned:
+        # Remove opening fence (```json or ```)
+        cleaned = re.sub(r"^```(?:json)?\s*", "", cleaned, flags=re.MULTILINE)
+        # Remove closing fence
+        cleaned = re.sub(r"```\s*$", "", cleaned, flags=re.MULTILINE)
+        cleaned = cleaned.strip()
+        try:
+            return json.loads(cleaned)
+        except json.JSONDecodeError:
+            pass
+
+    # 3. Substring extraction — grab everything between the first { and last }
+    start = raw.find("{")
+    end = raw.rfind("}")
+    if start != -1 and end != -1 and end > start:
+        try:
+            return json.loads(raw[start : end + 1])
+        except json.JSONDecodeError:
+            pass
+
+    # All attempts failed — re-raise so the caller can log the raw text
+    raise json.JSONDecodeError("No valid JSON object found in response", raw, 0)
+
 
 def _build_bonding_curve_state(
     token: TokenEvent,
