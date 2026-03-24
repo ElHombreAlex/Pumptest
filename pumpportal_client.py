@@ -96,16 +96,12 @@ class PumpPortalClient:
     # ── Internal ──────────────────────────────────────────────────────────────
 
     async def _connect_and_listen(self) -> None:
-        # Append the API key as a query parameter when one is configured.
-        # PumpPortal authenticates WebSocket connections via the URL, not headers.
-        ws_url = PUMPPORTAL_WS_BASE
-        if cfg.PUMPPORTAL_API_KEY:
-            ws_url = f"{PUMPPORTAL_WS_BASE}?api-key={cfg.PUMPPORTAL_API_KEY}"
-
-        log.info("Connecting to PumpPortal WebSocket %s…",
-                 "(authenticated) " if cfg.PUMPPORTAL_API_KEY else "(unauthenticated) ")
+        # PumpPortal's data API is free and unauthenticated — no API key needed
+        # in the URL. The PUMPPORTAL_API_KEY only applies to the trade-local
+        # HTTP endpoint (used by trader.py), not the WebSocket stream.
+        log.info("Connecting to PumpPortal WebSocket …")
         async with websockets.connect(
-            ws_url,
+            PUMPPORTAL_WS_BASE,
             ping_interval=20,
             ping_timeout=10,
             close_timeout=5,
@@ -128,6 +124,10 @@ class PumpPortalClient:
                 )
 
             async for raw in ws:
+                # Temporary diagnostic: log every raw frame so we can verify
+                # what PumpPortal is actually delivering over the wire.
+                # Remove or reduce this once tokens are confirmed flowing.
+                log.debug("WS RAW: %s", str(raw)[:500])
                 try:
                     data = json.loads(raw)
                     await self._dispatch(data)

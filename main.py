@@ -31,8 +31,10 @@ def _setup_logging() -> None:
     console_handler = RichHandler(rich_tracebacks=True, markup=True)
     console_handler.setFormatter(logging.Formatter("%(message)s", datefmt="[%X]"))
 
-    # File handler — plain timestamped lines for tailing / monitoring
+    # File handler — DEBUG level so raw WS frames and other diagnostic
+    # messages are captured; console stays at INFO to avoid terminal noise.
     file_handler = logging.FileHandler(LOG_FILE, encoding="utf-8")
+    file_handler.setLevel(logging.DEBUG)
     file_handler.setFormatter(
         logging.Formatter(
             fmt="%(asctime)s  %(levelname)-8s  %(name)s  %(message)s",
@@ -40,7 +42,9 @@ def _setup_logging() -> None:
         )
     )
 
-    logging.basicConfig(level=logging.INFO, handlers=[console_handler, file_handler])
+    logging.basicConfig(level=logging.DEBUG, handlers=[console_handler, file_handler])
+    # Console stays INFO — only the file gets DEBUG output
+    console_handler.setLevel(logging.INFO)
 
     # Quiet noisy libraries
     for lib in ("websockets", "asyncio", "aiohttp"):
