@@ -139,21 +139,30 @@ class PumpPortalClient:
         self._ws = None
 
     async def _dispatch(self, data: dict) -> None:
-        """Route an incoming message to the right callbacks."""
-        # New token creation
-        if "mint" in data and "traderPublicKey" not in data:
+        """
+        Route an incoming message to the right callbacks based on txType.
+
+        All PumpPortal events include traderPublicKey (the creator/trader wallet),
+        so the old field-presence heuristic ("mint in data and traderPublicKey
+        not in data") misrouted every create event as a trade and dropped it.
+        Routing on the explicit txType field is unambiguous.
+        """
+        tx_type = data.get("txType")
+
+        if tx_type == "create":
             event = _parse_token_event(data)
             if event:
                 for cb in self._token_callbacks:
                     await cb(event)
-            return
 
-        # Trade event
-        if "traderPublicKey" in data and "mint" in data:
+        elif tx_type in ("buy", "sell"):
             event = _parse_trade_event(data)
             if event:
                 for cb in self._trade_callbacks:
                     await cb(event)
+
+        # Subscription ack messages (e.g. {"message": "Successfully subscribed…"})
+        # and any other server-sent frames are silently ignored.
 
 
 # ── Parsers ───────────────────────────────────────────────────────────────────
