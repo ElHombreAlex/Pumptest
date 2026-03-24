@@ -13,6 +13,7 @@ The flow for a real trade:
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Optional
 
@@ -38,9 +39,12 @@ class TradeExecutor:
 
         if not self._dry_run:
             self._keypair = _load_keypair(cfg.WALLET_PRIVATE_KEY)
-            # Primary RPC first, then any configured fallbacks
+            # Primary RPC first, then any configured fallbacks.
+            # timeout=30 replaces the solana-py default of 10s — public mainnet
+            # RPC nodes regularly take 15-25s under load, causing TimeoutError
+            # crashes with the default value.
             urls = [cfg.SOLANA_RPC_URL] + cfg.SOLANA_RPC_FALLBACK_URLS
-            self._rpc_clients = [AsyncClient(url) for url in urls if url]
+            self._rpc_clients = [AsyncClient(url, timeout=30) for url in urls if url]
             log.info("Loaded %d RPC endpoint(s)", len(self._rpc_clients))
 
     # ── Buy ───────────────────────────────────────────────────────────────────
@@ -188,7 +192,10 @@ class TradeExecutor:
             log.exception("Failed to deserialise/sign transaction: %s", exc)
             return None
 
-        # Try each RPC in order; return the first successful signature
+        # Try each RPC in order; return the first successful signature.
+        # asyncio.TimeoutError is caught explicitly — it can originate inside
+        # aiohttp's connector layer before the awaited call returns, bypassing
+        # a plain `except Exception` in some Python/aiohttp version combinations.
         for i, rpc in enumerate(self._rpc_clients):
             try:
                 result = await rpc.send_raw_transaction(
@@ -200,6 +207,8 @@ class TradeExecutor:
                         log.info("Transaction landed via fallback RPC #%d", i)
                     return str(result.value)
                 log.warning("RPC #%d returned no signature: %s", i, result)
+            except asyncio.TimeoutError:
+                log.warning("RPC #%d timed out (>30s) — trying next endpoint", i)
             except Exception as exc:
                 log.warning("RPC #%d failed: %s", i, exc)
 
