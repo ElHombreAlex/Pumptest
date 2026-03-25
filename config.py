@@ -56,6 +56,11 @@ class Config:
     # Only analyze if initial buy activity meets threshold (SOL volume in first trades)
     MIN_INITIAL_SOL_VOLUME: float = float(os.getenv("MIN_INITIAL_SOL_VOLUME", "0.5"))
 
+    # ── Claude rate limiting ───────────────────────────────────────────────────
+    # Max Claude API calls per minute. Excess calls queue and wait rather than
+    # failing, so analysis is delayed rather than dropped.
+    MAX_CLAUDE_RPM: int = int(os.getenv("MAX_CLAUDE_RPM", "20"))
+
     # ── Warm-up window before Claude analysis ─────────────────────────────────
     # Collect at least this many trades before asking Claude to score a token
     WARM_UP_TRADES: int = int(os.getenv("WARM_UP_TRADES", "10"))

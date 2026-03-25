@@ -6,10 +6,14 @@ on a 0-100 confidence scale and recommends whether to BUY, WATCH, or SKIP.
 """
 from __future__ import annotations
 
+import collections
 import json
 import logging
 import re
+import time
 from typing import Any
+
+import asyncio
 
 import anthropic
 
@@ -33,64 +37,28 @@ _VIRTUAL_TOKEN_OFFSET = INITIAL_VIRTUAL_TOKEN_RESERVES - INITIAL_REAL_TOKEN_RESE
 _INITIAL_VIRTUAL_SOL = INITIAL_VIRTUAL_SOL_RESERVES / 1e9  # lamports → SOL
 
 _SYSTEM_PROMPT = """\
-Respond with ONLY a raw JSON object, no markdown, no code blocks, no explanation.
+Respond ONLY with a raw JSON object — no markdown, no explanation.
 
-You are a Pump.fun short-term trading analyst. Pump.fun tokens are inherently
-speculative and ephemeral — they are NOT traditional crypto projects. Most have
-no socials, no website, and no roadmap by design. Your job is NOT to find
-high-quality projects; it is to identify tokens with strong early momentum that
-are likely to pump further in the next few minutes so a small position can be
-exited at profit.
+You are a Pump.fun momentum analyst. Score tokens on early trade signals only.
+No socials/website is normal and NEUTRAL — never penalise for this alone.
 
-Output format — a single JSON object, nothing else:
-{
-  "confidence_score": <integer 0-100>,
-  "recommendation": "<BUY|WATCH|SKIP>",
-  "reasoning": "<2-3 sentence explanation focused on momentum signals>",
-  "risk_flags": ["<flag1>", "<flag2>"],
-  "suggested_buy_sol": <float>
-}
+Output (single JSON object, nothing else):
+{"confidence_score":<0-100>,"recommendation":"<BUY|WATCH|SKIP>","reasoning":"<2 sentences>","risk_flags":[...],"suggested_buy_sol":<float>}
 
-── SCORING FRAMEWORK ────────────────────────────────────────────────────────
+SCORE BANDS:
+60-100 BUY  — >70% buys, rising mcap, consistent sizes. +10 if socials present.
+38-59  WATCH — mixed signals, flat/slow mcap, erratic sizes.
+0-37   SKIP  — majority sells, whale-then-dump, zero trades, falling mcap.
 
-Score 60–100 (BUY) — strong early momentum, likely to continue:
-  • Multiple buys in early trades with consistent or growing trade sizes
-  • Buy/sell ratio skewed heavily toward buys (>70% buys)
-  • Market cap rising across the first trades (upward price trend)
-  • Bonus +10–20 pts if Twitter, Telegram, or website is present
-  • Bonus +5 pts for an engaging, original name/description
+RISK FLAGS (only when clearly evidenced):
+early_dump, whale_and_dump, zero_activity,
+rug_risk (dev >50% supply AND sells already visible — not speculation)
 
-Score 38–59 (WATCH) — some positive signals but mixed:
-  • Mix of buys and sells, no clear momentum direction
-  • Early trades present but trade sizes are very small or erratic
-  • Decent name/concept but no social presence
-  • Market cap flat or slightly rising
+CALIBRATION:
+- 8 buys + 2 sells + rising mcap → score 55-70 even with no socials.
+- pump_and_dump only if price is ALREADY falling in the data.
 
-Score 0–37 (SKIP) — clear dump signals or no activity:
-  • Majority of early trades are SELLS (dump already underway)
-  • Single large whale buy then immediate sells from other wallets
-  • Zero trades after warm-up window (no interest)
-  • Market cap falling across trades (price declining from open)
-
-── IMPORTANT CALIBRATION NOTES ──────────────────────────────────────────────
-
-- NO SOCIALS is normal on Pump.fun. Do NOT score below 38 purely because
-  there are no social links. Treat it as neutral, not a red flag by itself.
-- A token with 8 buys and 2 sells and a rising market cap should score 55–70
-  even with no name recognition and no socials.
-- Only flag "rug_risk" if the DEV buy was >50% of supply AND early sells
-  are already visible. A large dev buy alone is not enough.
-- "pump_and_dump" should only be flagged if price is ALREADY falling in the
-  trade data — not speculatively.
-
-Risk flags (only include flags that are clearly evidenced in the trade data):
-- "early_dump"      — majority of early trades are sells, price falling
-- "whale_and_dump"  — one huge buy immediately followed by many sells
-- "zero_activity"   — fewer than 3 trades in the warm-up window
-- "rug_risk"        — dev bought >50% of supply AND early dump visible
-- "no_socials"      — only include if combined with other negative signals
-
-Respond with ONLY a raw JSON object, no markdown, no code blocks, no explanation.\
+Respond ONLY with a raw JSON object.\
 """
 
 _USER_TEMPLATE = """\
@@ -121,12 +89,46 @@ New Pump.fun token launched. Analyse it:
 """
 
 
+class _SlidingWindowRateLimiter:
+    """
+    Sliding-window rate limiter for the Claude API.
+
+    Tracks the timestamps of recent calls in a deque.  Before each call,
+    entries older than 60 seconds are dropped.  If the window is full
+    (len >= max_rpm), the caller awaits until the oldest entry expires.
+    """
+
+    def __init__(self, max_rpm: int) -> None:
+        self._max_rpm = max_rpm
+        self._calls: collections.deque[float] = collections.deque()
+
+    async def acquire(self) -> None:
+        while True:
+            now = time.monotonic()
+            # Evict calls that are outside the 60-second window
+            while self._calls and now - self._calls[0] >= 60.0:
+                self._calls.popleft()
+            if len(self._calls) < self._max_rpm:
+                self._calls.append(now)
+                return
+            # Window is full — wait until the oldest call rolls off
+            wait = 60.0 - (now - self._calls[0])
+            log.debug(
+                "Claude RPM cap reached (%d/%d) — waiting %.1fs",
+                len(self._calls),
+                self._max_rpm,
+                wait,
+            )
+            await asyncio.sleep(max(0.05, wait))
+
+
 class TokenAnalyzer:
     """Uses Claude to score and filter new tokens."""
 
     def __init__(self) -> None:
         self._client = anthropic.Anthropic(api_key=cfg.ANTHROPIC_API_KEY)
         self._cache: dict[str, AnalysisResult] = {}
+        self._rate_limiter = _SlidingWindowRateLimiter(cfg.MAX_CLAUDE_RPM)
 
     async def analyse(
         self,
@@ -165,6 +167,8 @@ class TokenAnalyzer:
         )
 
         log.info("Analysing token %s (%s) with Claude …", token.symbol, token.mint[:8])
+
+        await self._rate_limiter.acquire()
 
         try:
             response = self._client.messages.create(
