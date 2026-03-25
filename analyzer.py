@@ -170,8 +170,17 @@ class TokenAnalyzer:
             response = self._client.messages.create(
                 model=cfg.ANTHROPIC_MODEL,
                 max_tokens=512,
-                system=_SYSTEM_PROMPT,
+                # system is a list so we can attach cache_control, which tells
+                # Anthropic to cache this (long, static) prompt between calls.
+                # Cache hits cost ~10× less than input tokens, dramatically
+                # reducing cost when many tokens are analysed per session.
+                system=[{
+                    "type": "text",
+                    "text": _SYSTEM_PROMPT,
+                    "cache_control": {"type": "ephemeral"},
+                }],
                 messages=[{"role": "user", "content": user_msg}],
+                extra_headers={"anthropic-beta": "prompt-caching-2024-07-31"},
             )
 
             # Validate response structure before accessing fields

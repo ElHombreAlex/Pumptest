@@ -24,7 +24,7 @@ import logging
 import time
 
 from config import cfg
-from models import TokenEvent, TradeEvent
+from models import TokenEvent, TradeAction, TradeEvent
 from pumpportal_client import PumpPortalClient
 from analyzer import TokenAnalyzer
 from trader import TradeExecutor
@@ -183,6 +183,28 @@ class TradingAgent:
         self._analysing.add(token.mint)
         try:
             trades = list(self._trade_buffer[token.mint])
+
+            # ── Pre-filter: skip obvious junk without spending an API call ──
+            buy_count = sum(1 for t in trades if t.action == TradeAction.BUY)
+            if not trades or buy_count == 0:
+                log.info(
+                    "[%s] Pre-filter SKIP — zero buys (pure sell dump)",
+                    token.symbol,
+                )
+                self._decided.add(token.mint)
+                await self._client.unsubscribe_token(token.mint)
+                return
+            buy_ratio = buy_count / len(trades)
+            if buy_ratio < 0.2:
+                log.info(
+                    "[%s] Pre-filter SKIP — buy_ratio=%.0f%% (<20%%)",
+                    token.symbol,
+                    buy_ratio * 100,
+                )
+                self._decided.add(token.mint)
+                await self._client.unsubscribe_token(token.mint)
+                return
+
             analysis = await self._analyzer.analyse(token, trades)
 
             log.info(
