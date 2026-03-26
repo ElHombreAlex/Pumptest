@@ -118,6 +118,10 @@ class RiskManager:
         pos.current_market_cap = event.new_market_cap
         self._last_trade_at[pos.mint] = time.time()
 
+        # Track peak market cap for trailing stop
+        if event.new_market_cap > pos.peak_mcap:
+            pos.peak_mcap = event.new_market_cap
+
         # P&L formula: (current_price - entry_price) × tokens_held
         # All prices are in SOL-per-token (market_cap / total_supply).
         # token_amount is already normalised to the same 1e9 basis as the mcap
@@ -137,6 +141,22 @@ class RiskManager:
             pos.take_profit_market_cap,
             pos.stop_loss_market_cap,
         )
+
+        # ── Trailing stop ─────────────────────────────────────────────────────
+        if cfg.TRAILING_STOP_PCT > 0 and pos.peak_mcap > 0:
+            trailing_level = pos.peak_mcap * (1 - cfg.TRAILING_STOP_PCT)
+            if event.new_market_cap <= trailing_level:
+                log.info(
+                    "[%s] TRAILING STOP triggered | mcap=%.2f <= peak_mcap=%.2f * %.0f%% = %.2f | pnl=%.4f SOL",
+                    pos.symbol,
+                    event.new_market_cap,
+                    pos.peak_mcap,
+                    (1 - cfg.TRAILING_STOP_PCT) * 100,
+                    trailing_level,
+                    pos.pnl_sol,
+                )
+                await self._close_position(pos, reason="trailing_stop")
+                return
 
         # ── Take-profit ───────────────────────────────────────────────────────
         if event.new_market_cap >= pos.take_profit_market_cap:

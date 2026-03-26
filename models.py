@@ -83,6 +83,7 @@ class Position:
     stop_loss_market_cap: float
     status: PositionStatus = PositionStatus.OPEN
     current_market_cap: float = 0.0
+    peak_mcap: float = 0.0          # highest market cap seen since entry (for trailing stop)
     pnl_sol: float = 0.0
     opened_at: float = field(default_factory=time.time)
     closed_at: Optional[float] = None

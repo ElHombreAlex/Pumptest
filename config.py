@@ -67,6 +67,11 @@ class Config:
     # …or wait this many seconds after token creation, whichever comes first
     WARM_UP_SECONDS: int = int(os.getenv("WARM_UP_SECONDS", "20"))
 
+    # ── Trailing stop ─────────────────────────────────────────────────────────
+    # Fraction below peak_mcap that triggers a trailing stop exit.
+    # E.g. 0.25 = close if price falls 25% from its peak. 0.0 = disabled.
+    TRAILING_STOP_PCT: float = float(os.getenv("TRAILING_STOP_PCT", "0.0"))
+
     # ── Stale position eviction ───────────────────────────────────────────────
     # If an open position hasn't received a trade update in this many minutes,
     # it is considered stale (token is dead/illiquid) and a sell is triggered.
