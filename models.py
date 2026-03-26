@@ -85,5 +85,6 @@ class Position:
     current_market_cap: float = 0.0
     peak_mcap: float = 0.0          # highest market cap seen since entry (for trailing stop)
     pnl_sol: float = 0.0
+    confidence_score: int = 0       # Claude score at entry (0-100)
     opened_at: float = field(default_factory=time.time)
     closed_at: Optional[float] = None

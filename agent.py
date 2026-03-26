@@ -304,7 +304,7 @@ class TradingAgent:
                 self._memory.record(TradeRecord(
                     symbol=pos.symbol,
                     recommendation="BUY",
-                    confidence_score=0,    # not stored on Position; placeholder
+                    confidence_score=pos.confidence_score,
                     pnl_sol=pos.pnl_sol,
                     close_reason=getattr(pos, "_close_reason", "unknown"),
                     entry_market_cap=pos.entry_market_cap,

@@ -266,6 +266,7 @@ def _make_position(
         stop_loss_market_cap=mcap * cfg.STOP_LOSS_MULTIPLIER,
         current_market_cap=mcap,
         status=PositionStatus.OPEN,
+        confidence_score=analysis.confidence_score,
     )
 
     label = "[SIM]" if simulated else "[LIVE]"

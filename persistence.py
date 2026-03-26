@@ -35,10 +35,15 @@ CREATE TABLE IF NOT EXISTS positions (
     status                  TEXT    NOT NULL DEFAULT 'open',
     current_market_cap      REAL    NOT NULL DEFAULT 0,
     pnl_sol                 REAL    NOT NULL DEFAULT 0,
+    confidence_score        INTEGER NOT NULL DEFAULT 0,
     opened_at               REAL    NOT NULL,
     closed_at               REAL
 );
 """
+
+_MIGRATIONS = [
+    "ALTER TABLE positions ADD COLUMN confidence_score INTEGER NOT NULL DEFAULT 0",
+]
 
 
 class PositionStore:
@@ -51,7 +56,17 @@ class PositionStore:
         self._conn.row_factory = sqlite3.Row
         self._conn.execute(_SCHEMA)
         self._conn.commit()
+        self._apply_migrations()
         log.debug("Position store initialised at %s", db_path)
+
+    def _apply_migrations(self) -> None:
+        """Idempotently add any columns that didn't exist in older DB files."""
+        for sql in _MIGRATIONS:
+            try:
+                self._conn.execute(sql)
+                self._conn.commit()
+            except sqlite3.OperationalError:
+                pass  # column already exists
 
     def save(self, pos: Position) -> None:
         """Insert or update a position row (upsert by mint)."""
@@ -60,8 +75,8 @@ class PositionStore:
             INSERT OR REPLACE INTO positions (
                 mint, symbol, entry_sol, entry_market_cap, token_amount,
                 entry_price_per_token, take_profit_market_cap, stop_loss_market_cap,
-                status, current_market_cap, pnl_sol, opened_at, closed_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                status, current_market_cap, pnl_sol, confidence_score, opened_at, closed_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 pos.mint,
@@ -75,6 +90,7 @@ class PositionStore:
                 pos.status.value,
                 pos.current_market_cap,
                 pos.pnl_sol,
+                pos.confidence_score,
                 pos.opened_at,
                 pos.closed_at,
             ),
@@ -102,6 +118,7 @@ class PositionStore:
                     status=PositionStatus(row["status"]),
                     current_market_cap=row["current_market_cap"],
                     pnl_sol=row["pnl_sol"],
+                    confidence_score=row["confidence_score"] or 0,
                     opened_at=row["opened_at"],
                     closed_at=row["closed_at"],
                 )
