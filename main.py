@@ -85,13 +85,25 @@ async def main() -> None:
 
     # Lazy import so that missing deps produce a cleaner error
     from agent import TradingAgent
+    from dashboard import Dashboard
 
     agent = TradingAgent()
 
+    dash: Dashboard | None = None
+    if cfg.DASHBOARD_ENABLED:
+        dash = Dashboard(agent, refresh_secs=cfg.DASHBOARD_REFRESH_SECS)
+
     try:
+        if dash:
+            # Dashboard must be started inside the running event loop, after
+            # the agent is constructed but before agent.run() blocks.
+            asyncio.get_event_loop().call_soon(dash.start)
         await agent.run()
     except KeyboardInterrupt:
         log.info("Interrupted — shutting down.")
+    finally:
+        if dash:
+            dash.stop()
 
 
 if __name__ == "__main__":

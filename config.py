@@ -77,6 +77,11 @@ class Config:
     # it is considered stale (token is dead/illiquid) and a sell is triggered.
     STALE_POSITION_MINUTES: int = int(os.getenv("STALE_POSITION_MINUTES", "30"))
 
+    # ── Live dashboard ────────────────────────────────────────────────────────
+    # Set DASHBOARD_ENABLED=true to render a Rich live table of open positions.
+    DASHBOARD_ENABLED: bool = os.getenv("DASHBOARD_ENABLED", "false").lower() == "true"
+    DASHBOARD_REFRESH_SECS: float = float(os.getenv("DASHBOARD_REFRESH_SECS", "5.0"))
+
     # ── Dry-run mode: log decisions but don't send transactions ───────────────
     DRY_RUN: bool = os.getenv("DRY_RUN", "true").lower() == "true"
 
