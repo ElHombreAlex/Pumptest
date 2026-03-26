@@ -115,7 +115,7 @@ class TradeExecutor:
             log.info("[DRY-RUN] Would sell %.0f%% of %s", pct, position.symbol)
             return True
 
-        amount_str = f"{pct}%"
+        amount_str = f"{pct:g}%"
         tx_bytes = await self._build_tx(
             action="sell",
             mint=position.mint,
@@ -170,7 +170,10 @@ class TradeExecutor:
                     if resp.status != 200:
                         body = await resp.text()
                         log.error(
-                            "PumpPortal API error %d: %s", resp.status, body[:200]
+                            "PumpPortal API error %d: %s | payload=%s",
+                            resp.status,
+                            body[:500],
+                            payload,
                         )
                         return None
                     data = await resp.read()
