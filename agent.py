@@ -24,6 +24,7 @@ import logging
 import time
 
 from config import cfg
+from memory import MemoryStore, TradeRecord
 from models import TokenEvent, TradeAction, TradeEvent
 from pumpportal_client import PumpPortalClient
 from analyzer import TokenAnalyzer
@@ -48,7 +49,8 @@ class TradingAgent:
 
     def __init__(self) -> None:
         self._client = PumpPortalClient()
-        self._analyzer = TokenAnalyzer()
+        self._memory = MemoryStore()
+        self._analyzer = TokenAnalyzer(memory=self._memory)
         self._executor = TradeExecutor()
 
         # Initialise persistence store and restore any positions that were open
@@ -72,6 +74,8 @@ class TradingAgent:
         self._analysing: set[str] = set()
         # tokens we've already made a decision on (buy or skip)
         self._decided: set[str] = set()
+        # track how many closed positions we've already recorded in memory
+        self._memory_recorded: int = 0
         # token metadata cache: mint → TokenEvent
         self._token_cache: dict[str, TokenEvent] = {}
 
@@ -91,6 +95,7 @@ class TradingAgent:
             self._summary_loop(),
             self._eviction_loop(),
             self._stale_position_loop(),
+            self._memory_loop(),
         )
 
     # ── Callbacks ─────────────────────────────────────────────────────────────
@@ -285,6 +290,27 @@ class TradingAgent:
                 self._trade_buffer.pop(mint, None)
             if stale:
                 log.debug("Evicted %d stale token entries from memory", len(stale))
+
+    async def _memory_loop(self) -> None:
+        """
+        Periodically record newly-closed positions into MemoryStore so that
+        get_summary() reflects recent outcomes in subsequent Claude prompts.
+        """
+        while True:
+            await asyncio.sleep(10)
+            closed = self._risk._closed
+            while self._memory_recorded < len(closed):
+                pos = closed[self._memory_recorded]
+                self._memory.record(TradeRecord(
+                    symbol=pos.symbol,
+                    recommendation="BUY",
+                    confidence_score=0,    # not stored on Position; placeholder
+                    pnl_sol=pos.pnl_sol,
+                    close_reason=getattr(pos, "_close_reason", "unknown"),
+                    entry_market_cap=pos.entry_market_cap,
+                    peak_market_cap=pos.peak_mcap,
+                ))
+                self._memory_recorded += 1
 
     async def _stale_position_loop(self) -> None:
         """

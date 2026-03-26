@@ -18,6 +18,7 @@ import asyncio
 import anthropic
 
 from config import cfg
+from memory import MemoryStore
 from models import AnalysisResult, TokenEvent, TradeEvent
 from bonding_curve import (
     BondingCurveCalculator,
@@ -86,6 +87,9 @@ New Pump.fun token launched. Analyse it:
 ## Agent Context
 - Max SOL I can spend: {max_buy_sol}
 - My confidence threshold: {min_score}/100
+
+## Session Memory (recent outcomes — use to calibrate score, not override signals)
+{memory_context}
 """
 
 
@@ -125,10 +129,11 @@ class _SlidingWindowRateLimiter:
 class TokenAnalyzer:
     """Uses Claude to score and filter new tokens."""
 
-    def __init__(self) -> None:
+    def __init__(self, memory: MemoryStore | None = None) -> None:
         self._client = anthropic.Anthropic(api_key=cfg.ANTHROPIC_API_KEY)
         self._cache: dict[str, AnalysisResult] = {}
         self._rate_limiter = _SlidingWindowRateLimiter(cfg.MAX_CLAUDE_RPM)
+        self._memory = memory
 
     async def analyse(
         self,
@@ -147,6 +152,10 @@ class TokenAnalyzer:
         graduation_pct = bc_state.graduation_progress_pct
         price_impact = BondingCurveCalculator.price_impact_pct(bc_state, cfg.MAX_BUY_SOL)
 
+        memory_context = (
+            self._memory.get_summary() if self._memory else "Memory not available."
+        )
+
         user_msg = _USER_TEMPLATE.format(
             name=token.name or "Unknown",
             symbol=token.symbol or "???",
@@ -164,6 +173,7 @@ class TokenAnalyzer:
             trade_summary=trade_summary or "No trades yet.",
             max_buy_sol=cfg.MAX_BUY_SOL,
             min_score=cfg.MIN_CONFIDENCE_SCORE,
+            memory_context=memory_context,
         )
 
         log.info("Analysing token %s (%s) with Claude …", token.symbol, token.mint[:8])
