@@ -120,12 +120,12 @@ class TradeExecutor:
         real_balance = await self._get_token_balance(position.mint)
         if real_balance is not None:
             if real_balance == 0:
-                log.error(
-                    "[%s] Wallet holds 0 tokens for this mint — buy likely "
-                    "failed on-chain.  Marking position closed without sell.",
+                log.warning(
+                    "[%s] Wallet holds 0 tokens — already sold or buy failed "
+                    "on-chain.  Marking position closed.",
                     position.symbol,
                 )
-                return False
+                return True  # nothing to sell; close the position cleanly
             token_amount = int(real_balance * (pct / 100.0))
             log.info(
                 "[%s] On-chain balance: %d tokens → selling %d",
@@ -148,7 +148,7 @@ class TradeExecutor:
             mint=position.mint,
             amount=token_amount,
             denominated_in_sol=False,
-            pool="pump",
+            pool="auto",  # auto detects bonding curve vs Raydium
         )
         if not tx_bytes:
             return False
