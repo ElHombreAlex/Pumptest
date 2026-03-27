@@ -169,12 +169,14 @@ class TradeExecutor:
         """
         try:
             from solders.pubkey import Pubkey  # type: ignore
+            from solana.rpc.types import TokenAccountOpts  # type: ignore
             wallet_pk = self._keypair.pubkey()
             mint_pk = Pubkey.from_string(mint)
+            opts = TokenAccountOpts(mint=mint_pk)
             for rpc in self._rpc_clients:
                 try:
                     resp = await rpc.get_token_accounts_by_owner_json_parsed(
-                        wallet_pk, {"mint": mint_pk}
+                        wallet_pk, opts
                     )
                     if resp.value:
                         info = resp.value[0].account.data.parsed["info"]["tokenAmount"]
