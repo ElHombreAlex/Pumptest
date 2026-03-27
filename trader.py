@@ -118,26 +118,28 @@ class TradeExecutor:
         # Use real on-chain balance — our stored estimate can differ from reality.
         # If the wallet holds 0 tokens the buy tx failed on-chain; skip the sell.
         real_balance = await self._get_token_balance(position.mint)
-        if real_balance is not None:
-            if real_balance == 0:
-                log.warning(
-                    "[%s] Wallet holds 0 tokens — already sold or buy failed "
-                    "on-chain.  Marking position closed.",
-                    position.symbol,
-                )
-                return True  # nothing to sell; close the position cleanly
+        if real_balance is not None and real_balance > 0:
             token_amount = int(real_balance * (pct / 100.0))
             log.info(
                 "[%s] On-chain balance: %d tokens → selling %d",
                 position.symbol, real_balance, token_amount,
             )
         else:
-            # RPC query failed — fall back to stored estimate
+            # Balance query returned 0 or failed — use stored estimate.
+            # When balance=0 it may be a false negative (RPC quirk), so we
+            # still attempt the sell and let PumpPortal be the final arbiter.
             token_amount = int(position.token_amount * (pct / 100.0))
-            log.warning(
-                "[%s] Could not query on-chain balance; using stored estimate %d",
-                position.symbol, token_amount,
-            )
+            if real_balance == 0:
+                log.warning(
+                    "[%s] On-chain balance shows 0 — using stored estimate %d "
+                    "(PumpPortal will reject if wallet truly empty)",
+                    position.symbol, token_amount,
+                )
+            else:
+                log.warning(
+                    "[%s] Could not query on-chain balance; using stored estimate %d",
+                    position.symbol, token_amount,
+                )
 
         if token_amount <= 0:
             log.error("[%s] Sell amount is 0 — skipping", position.symbol)
