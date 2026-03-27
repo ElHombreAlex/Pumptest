@@ -58,9 +58,10 @@ class RiskManager:
     def restore_position(self, position: Position) -> None:
         """Re-load a position from persistent storage without saving it again."""
         self._positions[position.mint] = position
-        # Give the position a fresh stale window — we just re-subscribed to its
-        # trade stream, so give it STALE_POSITION_MINUTES before flagging it.
-        self._last_trade_at[position.mint] = time.time()
+        # Use the original open timestamp so the stale timer reflects real age.
+        # If the position was opened 2 hours ago, it should be flagged as stale
+        # immediately on the next check — not given another full STALE window.
+        self._last_trade_at[position.mint] = position.opened_at
         log.info(
             "Restored position: %s | entry_mcap=%.2f | current_mcap=%.2f",
             position.symbol,

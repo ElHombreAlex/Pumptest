@@ -149,7 +149,7 @@ class TradeExecutor:
             "action": action,
             "mint": mint,
             "amount": amount,
-            "denominatedInSol": str(denominated_in_sol).lower(),
+            "denominatedInSol": denominated_in_sol,
             "slippage": cfg.SLIPPAGE,
             "priorityFee": cfg.PRIORITY_FEE,
             "pool": "auto",
