@@ -179,8 +179,11 @@ class TradeExecutor:
                         wallet_pk, opts
                     )
                     if resp.value:
-                        info = resp.value[0].account.data.parsed["info"]["tokenAmount"]
-                        return int(info["amount"])
+                        ta = resp.value[0].account.data.parsed["info"]["tokenAmount"]
+                        # `amount` is raw base units; divide by 10^decimals to get
+                        # the display (UI) token count that PumpPortal expects.
+                        decimals = int(ta.get("decimals", 6))
+                        return int(ta["amount"]) // (10 ** decimals)
                     # No account found → wallet never received these tokens
                     return 0
                 except Exception as exc:
