@@ -115,9 +115,34 @@ class TradeExecutor:
             log.info("[DRY-RUN] Would sell %.0f%% of %s", pct, position.symbol)
             return True
 
-        # trade-local requires a whole-number token amount, not a percentage.
-        # Round to int — fractional tokens are invalid on Solana.
-        token_amount = int(position.token_amount * (pct / 100.0))
+        # Use real on-chain balance — our stored estimate can differ from reality.
+        # If the wallet holds 0 tokens the buy tx failed on-chain; skip the sell.
+        real_balance = await self._get_token_balance(position.mint)
+        if real_balance is not None:
+            if real_balance == 0:
+                log.error(
+                    "[%s] Wallet holds 0 tokens for this mint — buy likely "
+                    "failed on-chain.  Marking position closed without sell.",
+                    position.symbol,
+                )
+                return False
+            token_amount = int(real_balance * (pct / 100.0))
+            log.info(
+                "[%s] On-chain balance: %d tokens → selling %d",
+                position.symbol, real_balance, token_amount,
+            )
+        else:
+            # RPC query failed — fall back to stored estimate
+            token_amount = int(position.token_amount * (pct / 100.0))
+            log.warning(
+                "[%s] Could not query on-chain balance; using stored estimate %d",
+                position.symbol, token_amount,
+            )
+
+        if token_amount <= 0:
+            log.error("[%s] Sell amount is 0 — skipping", position.symbol)
+            return False
+
         tx_bytes = await self._build_tx(
             action="sell",
             mint=position.mint,
@@ -136,6 +161,31 @@ class TradeExecutor:
         return True
 
     # ── Internal ──────────────────────────────────────────────────────────────
+
+    async def _get_token_balance(self, mint: str) -> Optional[int]:
+        """
+        Return the wallet's raw token balance (base units, not UI amount).
+        Returns None if the query fails so callers can fall back gracefully.
+        """
+        try:
+            from solders.pubkey import Pubkey  # type: ignore
+            wallet_pk = self._keypair.pubkey()
+            mint_pk = Pubkey.from_string(mint)
+            for rpc in self._rpc_clients:
+                try:
+                    resp = await rpc.get_token_accounts_by_owner_json_parsed(
+                        wallet_pk, {"mint": mint_pk}
+                    )
+                    if resp.value:
+                        info = resp.value[0].account.data.parsed["info"]["tokenAmount"]
+                        return int(info["amount"])
+                    # No account found → wallet never received these tokens
+                    return 0
+                except Exception as exc:
+                    log.debug("Balance RPC query failed: %s", exc)
+        except Exception as exc:
+            log.warning("_get_token_balance unavailable: %s", exc)
+        return None
 
     async def _build_tx(
         self,
