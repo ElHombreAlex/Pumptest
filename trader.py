@@ -115,11 +115,13 @@ class TradeExecutor:
             log.info("[DRY-RUN] Would sell %.0f%% of %s", pct, position.symbol)
             return True
 
-        amount_str = f"{pct:g}%"
+        # trade-local requires a numeric token amount, not a percentage string.
+        # Use the stored token_amount, scaled by the requested pct.
+        token_amount = position.token_amount * (pct / 100.0)
         tx_bytes = await self._build_tx(
             action="sell",
             mint=position.mint,
-            amount=amount_str,
+            amount=token_amount,
             denominated_in_sol=False,
         )
         if not tx_bytes:
