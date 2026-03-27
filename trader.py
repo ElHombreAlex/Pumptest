@@ -115,9 +115,9 @@ class TradeExecutor:
             log.info("[DRY-RUN] Would sell %.0f%% of %s", pct, position.symbol)
             return True
 
-        # trade-local requires a numeric token amount, not a percentage string.
-        # Use the stored token_amount, scaled by the requested pct.
-        token_amount = position.token_amount * (pct / 100.0)
+        # trade-local requires a whole-number token amount, not a percentage.
+        # Round to int — fractional tokens are invalid on Solana.
+        token_amount = int(position.token_amount * (pct / 100.0))
         tx_bytes = await self._build_tx(
             action="sell",
             mint=position.mint,
