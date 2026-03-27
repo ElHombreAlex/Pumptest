@@ -123,6 +123,7 @@ class TradeExecutor:
             mint=position.mint,
             amount=token_amount,
             denominated_in_sol=False,
+            pool="pump",
         )
         if not tx_bytes:
             return False
@@ -142,6 +143,7 @@ class TradeExecutor:
         mint: str,
         amount,
         denominated_in_sol: bool,
+        pool: str = "auto",
     ) -> Optional[bytes]:
         """
         Ask PumpPortal to build a serialised transaction and return raw bytes.
@@ -151,10 +153,10 @@ class TradeExecutor:
             "action": action,
             "mint": mint,
             "amount": amount,
-            "denominatedInSol": denominated_in_sol,
+            "denominatedInSol": str(denominated_in_sol).lower(),
             "slippage": cfg.SLIPPAGE,
             "priorityFee": cfg.PRIORITY_FEE,
-            "pool": "auto",
+            "pool": pool,
         }
 
         headers = {}
